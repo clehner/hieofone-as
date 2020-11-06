@@ -309,7 +309,7 @@ class HomeController extends Controller
 
     public function authorize_user_action(Request $request, $id)
     {
-        $data['password'] = sha($id);
+        $data['password'] = sha1($id);
         DB::table('oauth_users')->where('username', '=', $id)->update($data);
         $query = DB::table('oauth_users')->where('username', '=', $id)->first();
         $owner_query = DB::table('owner')->first();
