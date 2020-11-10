@@ -1,7 +1,6 @@
 @extends('layouts.app')
 
 @section('view.stylesheet')
-	<link rel="stylesheet" href="{{ asset('assets/css/toastr.min.css') }}">
 	<style>
 	html {
 		position: relative;
@@ -35,7 +34,12 @@
 		<div class="col-md-8 col-md-offset-2">
 			<div class="panel panel-default">
 				<div class="panel-heading">
-					<h4 class="panel-title" style="height:35px;display:table-cell !important;vertical-align:middle;">Login</h4>
+					<h4 class="panel-title" style="height:35px;display:table-cell !important;vertical-align:middle;">
+						Login
+						@if (isset($vp_request_url))
+						with Credential Wallet
+						@endif
+	</h4>
 				</div>
 				<div class="panel-body">
 					<div style="text-align: center;">
@@ -48,11 +52,16 @@
 									</span>
 								</div>
 							@endif
-						</div>
-						<div id="uport_indicator" style="text-align: center;display:none;">
-							<i class="fa fa-spinner fa-spin fa-pulse fa-2x fa-fw"></i><span id="modaltext" style="margin:10px">Loading uPort...</span><br><br>
+							@if (isset($message))
+								<div class="form-group">
+									<span class="help-block">
+										<strong>{{ $message }}</strong>
+									</span>
+								</div>
+							@endif
 						</div>
 					</div>
+					@if (!isset($noform))
 					<form class="form-horizontal" role="form" method="POST" action="{{ route('login_passwordless') }}">
 						{{ csrf_field() }}
 						<div class="form-group{{ $errors->has('email') ? ' has-error' : '' }}">
@@ -78,12 +87,10 @@
 						@if (!isset($nooauth))
 						<div class="form-group">
 							<div class="col-md-8 col-md-offset-2">
-								<button type="button" class="btn btn-primary btn-block" id="connectUportBtn" onclick="loginBtnClick()">
-									<img src="{{ asset('assets/uport-logo-white.svg') }}" height="25" width="25" style="margin-right:5px"></img> Login with uPort
-								</button>
-								<button type="button" class="btn btn-primary btn-block" id="connectUportBtn1"><i class="fa fa-btn fa-plus"></i> Add Doximity Clinician Verification</button>
-								<!-- <button type="button" class="btn btn-primary btn-block" id="connectUportBtn1" onclick="uportConnect()">Connect uPort</button> -->
-								<!-- <button type="button" class="btn btn-primary btn-block" id="connectUportBtn2" onclick="sendEther()">Send Ether</button> -->
+								<a href="{{ route('login_vp') }}" class="btn btn-primary btn-block">
+									Login with Credential Wallet
+								</a>
+								<button type="button" class="btn btn-primary btn-block" id="addVerificationBtn"><i class="fa fa-btn fa-plus"></i> Add Doximity Clinician Verification</button>
 								@if (isset($google))
 									<a class="btn btn-primary btn-block" href="{{ url('/google') }}">
 										<i class="fa fa-btn fa-google"></i> Login with Google
@@ -93,6 +100,48 @@
 						</div>
 						@endif
 					</form>
+					@endif
+					@if (isset($vp_request_url))
+					<div class="form-group">
+						<div style="text-align: center;">
+							<p>Please scan this QR code with your credential wallet to proceed:</p>
+							{!! QrCode::size(300)->generate($vp_request_url) !!}
+							<p id="errors"></p>
+					</div>
+					@endif
+					@if ($errors->has('tryagain') && isset($vp_received))
+					<div class="col-md-6 col-md-offset-3">
+						<a href="?retry_vp=1" class="btn btn-primary btn-block">
+							Try again
+						</a>
+					</div>
+					@endif
+					@if (isset($get_email))
+					<p>Please enter your email address to create your account.</p>
+					<form class="form-horizontal" role="form" method="POST" action="">
+						{{ csrf_field() }}
+						<div class="form-group{{ $errors->has('email') ? ' has-error' : '' }}">
+							<label for="email" class="col-md-4 control-label">Email </label>
+
+							<div class="col-md-6">
+								<input id="email" class="form-control" name="email" value="{{ old('email') }}" data-toggle="tooltip">
+
+								@if ($errors->has('email'))
+									<span class="help-block">
+										<strong>{{ $errors->first('email') }}</strong>
+									</span>
+								@endif
+							</div>
+						</div>
+						<div class="form-group">
+							<div class="col-md-6 col-md-offset-4">
+								<button type="submit" class="btn btn-primary">
+									Continue
+								</button>
+							</div>
+						</div>
+					</form>
+					@endif
 				</div>
 			</div>
 		</div>
@@ -107,11 +156,11 @@
 	<div class="modal-dialog">
 	  <!-- Modal content-->
 		<div class="modal-content">
-			<div id="modal1_header" class="modal-header">Add NPI credential to uPort?</div>
+			<div id="modal1_header" class="modal-header">Add NPI credential to credential wallet?</div>
 			<div id="modal1_body" class="modal-body" style="height:30vh;overflow-y:auto;">
-				<p>This will simulate adding a verified credential to your existing uPort.</p>
-				<p>Clicking on Get from Doximity will demonstrate how you can get a verified credential if you have an existing Doximity account</p>
-				<p>After the NPI credential is added, click on Login with uPort</p>
+				<p>This will simulate adding a verifiable credential to your existing credential wallet.</p>
+				<p>Clicking on Get from Doximity will demonstrate how you can get a verifiable credential if you have an existing Doximity account.</p>
+				<p>After the NPI credential is added, click on Login with Credential Wallet</p>
 				<p>This will enable you to write a prescription.</p>
 			</div>
 			<div class="modal-footer">
@@ -124,61 +173,51 @@
 @endsection
 
 @section('view.scripts')
-<!-- <script src="{{ asset('assets/js/web3.js') }}"></script> -->
-<script src="{{ asset('assets/js/uport-connect.js') }}"></script>
-<script src="{{ asset('assets/js/toastr.min.js') }}"></script>
 <script type="text/javascript">
 	$(document).ready(function() {
 		$("#email").focus();
 		$('[data-toggle="tooltip"]').tooltip();
-		$("#connectUportBtn1").click(function(){
+		$("#addVerificationBtn").click(function(){
             $('#modal1').modal('show');
         });
 		$('#doximity_modal').click(function(){
 			$('#modal1').modal('hide');
 		});
 	});
-	// Setup
-	const Connect = window.uportconnect;
-	const appName = 'Trustee for <?php echo $name; ?>';
-	const uport = new Connect(appName, {
-		network: 'rinkeby'
-	});
-	const loginBtnClick = () => {
-		$('#uport_indicator').show();
-		uport.requestDisclosure({
-			requested: ['name', 'email', 'NPI'],
-			notifications: true // We want this if we want to recieve credentials
-	    });
-		uport.onResponse('disclosureReq').then((res) => {
-			var did = res.payload.did;
-			var credentials = res.payload.verified;
-			console.log(res.payload);
-			var uport_url = '<?php echo route("login_uport"); ?>';
-			var uport_data = 'name=' + res.payload.name + '&uport=' + res.payload.did;
-			if (typeof res.payload.NPI !== 'undefined') {
-				uport_data += '&npi=' + res.payload.NPI;
+	@if (isset($vp_request_url))
+	var pollUrl = {!! json_encode(route('login_vp_poll')) !!};
+	var csrfToken = $("meta[name='csrf-token']").attr('content');
+	var interval = 3e3;
+	function pollLogin() {
+		var xhr = new XMLHttpRequest();
+		xhr.onreadystatechange = function () {
+			if (this.readyState !== 4) return;
+			switch (this.status) {
+			case 200: // Login completed
+				return location.reload();
+			case 410: // VP request expired
+				errors.innerText = 'Your QR code expired. Please reload the page to get a new one.';
+				return;
+			case 400: // VP request not in session
+				errors.innerText = 'There was a problem coordinating with the server. Please reload the page to try again.';
+				return;
+			case 404: // VP request not in db
+				errors.innerText = 'There was a problem with the request. Please reload the page to try again.';
+				return;
+			case 403: // Waiting
+				errors.innerText = '';
+				break;
+			case 0: // Connection error
+				errors.innerText = 'There was a problem communicating with the server. Are you offline?';
+				break;
 			}
-			if (typeof res.payload.email !== 'undefined') {
-				uport_data += '&email=' + res.payload.email;
-			}
-			$.ajax({
-				type: "POST",
-				url: uport_url,
-				data: uport_data,
-				dataType: 'json',
-				beforeSend: function(request) {
-					return request.setRequestHeader("X-CSRF-Token", $("meta[name='csrf-token']").attr('content'));
-				},
-				success: function(data){
-					if (data.message !== 'OK') {
-						toastr.error(data.message);
-					} else {
-						window.location = data.url;
-					}
-				}
-			});
-		}, console.err);
-	};
+			setTimeout(pollLogin, interval);
+		};
+		xhr.open('POST', pollUrl);
+		xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+		xhr.send(null);
+	}
+	pollLogin()
+	@endif
 </script>
 @endsection

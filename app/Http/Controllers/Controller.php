@@ -726,7 +726,7 @@ class Controller extends BaseController
 		return true;
 	}
 
-	protected function login_uport_common($uport_user)
+	protected function login_vp_common($oauth_user, $data)
 	{
 		if (Session::get('oauth_response_type') == 'code') {
 			$client_id = Session::get('oauth_client_id');
@@ -735,49 +735,51 @@ class Controller extends BaseController
 			$client_id = $client->client_id;
 		}
 		Session::put('login_origin', 'login_direct');
-		$user = DB::table('users')->where('email', '=', $uport_user->email)->first();
-		$this->login_sessions($uport_user, $client_id);
+		$user = DB::table('users')->where('email', '=', $oauth_user->email)->first();
+		if (!$user) {
+			return view('auth.login', $data)->withErrors(['tryagain' => 'There was a problem looking up your account. Please contact the owner of this authorization server for assistance.']);
+		}
+		$this->login_sessions($oauth_user, $client_id);
 		Auth::loginUsingId($user->id);
-		$this->activity_log($uport_user->email, 'Login - uPort');
-		$this->notify($uport_user);
+		Session::forget('login_vp');
+		$this->activity_log($oauth_user->email, 'Login - Verifiable Credential');
+		$this->notify($oauth_user);
 		Session::save();
-		$return['message'] = 'OK';
 		if (Session::has('uma_permission_ticket') && Session::has('uma_redirect_uri') && Session::has('uma_client_id') && Session::has('email')) {
 			// If generated from rqp_claims endpoint, do this
-			$return['url'] = route('rqp_claims');
+			return redirect()->route('rqp_claims');
 		} elseif (Session::get('oauth_response_type') == 'code') {
 			// Confirm if client is authorized
 			$authorized = DB::table('oauth_clients')->where('client_id', '=', $client_id)->where('authorized', '=', 1)->first();
 			if ($authorized) {
 				// This call is from authorization endpoint and client is authorized.  Check if user is associated with client
 				$user_array = explode(' ', $authorized->user_id);
-				if (in_array($uport_user->username, $user_array)) {
+				if (in_array($oauth_user->username, $user_array)) {
 					// Go back to authorize route
 					Session::put('is_authorized', 'true');
-					$return['url'] = route('authorize');
+					return redirect()->route('authorize');
 				} else {
 					// Get user permission
-					$return['url'] = route('login_authorize');
+					return redirect()->route('login_authorize');
 				}
 			} else {
 				// Get owner permission if owner is logging in from new client/registration server
 				if ($oauth_user) {
-					if ($owner_query->sub == $uport_user->sub) {
-						$return['url'] = route('authorize_resource_server');
+					if ($owner_query->sub == $oauth_user->sub) {
+						return redirect()->route('authorize_resource_server');
 					} else {
 						// Somehow, this is a registered user, but not the owner, and is using an unauthorized client - return back to login screen
-						$return['message'] = 'Unauthorized client.  Please contact the owner of this authorization server for assistance.';
+						return view('auth.login', $data)->withErrors(['tryagain' => 'Unauthorized client.  Please contact the owner of this authorization server for assistance.']);
 					}
 				} else {
 					// Not a registered user
-					$return['message'] = 'Not a registered user.  Please contact the owner of this authorization server for assistance.';
+					return view('auth.login', $data)->withErrors(['tryagain' => 'Not a registered user.  Please contact the owner of this authorization server for assistance.']);
 				}
 			}
 		} else {
 			//  This call is directly from the home route.
-			$return['url'] = route('home');
+			return redirect()->route('home');
 		}
-		return $return;
 	}
 
 	protected function nexmo($number, $message)

@@ -8,7 +8,9 @@ use ADCI\FullNameParser\Parser;
 use Artisan;
 use Auth;
 use Cache\Adapter\Filesystem\FilesystemCachePool;
+use Carbon\Carbon;
 use DB;
+use DIDKit\DIDKit;
 use File;
 use Google_Client;
 use GuzzleHttp;
@@ -769,184 +771,253 @@ class OauthController extends Controller
         }
     }
 
-    public function login_uport(Request $request)
+    public function vp_request(Request $request)
     {
-        $owner_query = DB::table('owner')->first();
-        $proxies = DB::table('owner')->where('sub', '!=', $owner_query->sub)->get();
-        $proxy_arr = [];
-        if ($proxies->count()) {
-            foreach ($proxies as $proxy_row) {
-                $proxy_arr[] = $proxy_row->sub;
-            }
-        }
-        if ($request->has('uport')) {
-            $uport_notify = false;
-            $valid_npi = '';
-            $uport_user1 = DB::table('oauth_users')->where('uport_id', '=', $request->input('uport'))->where('password', '!=', 'Pending')->first();
-            if ($uport_user1) {
-                $return = $this->login_uport_common($uport_user1);
-            } else {
-                if ($request->has('email') && $request->input('email') !== '') {
-                    // Start searching for users by checking name - will need to be more specific with e-mail address, verifiable claims, once in production etc
-                    $name = $request->input('name');
-                    $parser = new Parser();
-                    $nameObject = $parser->parse($name);
-                    if ($request->has('npi')) {
-                        $uport_user = DB::table('oauth_users')
-                            ->where('first_name', '=', $nameObject->getFirstName())
-                            ->where('last_name', '=', $nameObject->getLastName())
-                            ->where('npi', '=', $request->input('npi'))
-                            ->where('email', '=', $request->input('email'))
-                            ->where('password', '!=', 'Pending')->first();
-                    } else {
-                        $uport_user_query = DB::table('oauth_users')
-                            ->where('first_name', '=', $nameObject->getFirstName())
-                            ->where('last_name', '=', $nameObject->getLastName())
-                            ->where('email', '=', $request->input('email'))
-                            ->where('password', '!=', 'Pending');
-                        $uport_user_query->where(function($query_array) {
-                            $query_array->where('npi', '=', null)
-                            ->orWhere('npi', '=', '');
-                        });
-                        $uport_user = $uport_user_query->first();
-                    }
-                    if ($uport_user) {
-                        $uport['uport_id'] = $request->input('uport');
-                        DB::table('oauth_users')->where('username', '=', $uport_user->username)->update($uport);
-                        $return = $this->login_uport_common($uport_user);
-                    } else {
-                        // Check if NPI field exists
-                        if ($request->has('npi')) {
-                            if ($request->input('npi') !== '') {
-                                if (is_numeric($request->input('npi'))) {
-                                    $npi1 = $request->input('npi');
-                                    if (strlen($npi1) == '10') {
-                                        // Obtain NPI information
-                                        $npi_arr = $this->npi_lookup($npi1);
-                                        $name = '';
-                                        if (! $npi_arr) {
-                                            $return['message'] = 'NPI lookup API is temporarily not working; try again later';
-                                        } else {
-                                            if ($npi_arr['result_count'] > 0) {
-                                                $npi_name = $npi_arr['results'][0]['basic']['first_name'];
-                                                if (isset($npi_arr['results'][0]['basic']['middle_name'])) {
-                                                    $npi_name .= ' ' . $npi_arr['results'][0]['basic']['middle_name'];
-                                                }
-                                                $npi_name .= ' ' . $npi_arr['results'][0]['basic']['last_name'] . ', ' . $npi_arr['results'][0]['basic']['credential'];
-                                            }
-                                            if ($npi_name !== '') {
-                                                if ($owner_query->any_npi == 1) {
-                                                    // Automatically add user if NPI is valid
-                                                    if (Session::get('oauth_response_type') == 'code') {
-                                                        $client_id = Session::get('oauth_client_id');
-                                                    } else {
-                                                        $client_id = $owner_query->client_id;
-                                                    }
-                                                    $authorized = DB::table('oauth_clients')->where('client_id', '=', $client_id)->where('authorized', '=', 1)->first();
-                                                    if ($authorized) {
-                                                        // Make sure email is unique
-                                                        $email_check = DB::table('users')->where('email', '=', $request->input('email'))->first();
-                                                        if ($email_check) {
-                                                            $return['message'] = 'You are not authorized to access this authorization server.  Email address already exists for another user.';
-                                                        } else {
-                                                            // Add new user
-                                                            Session::put('uport_first_name', $nameObject->getFirstName());
-                                                            Session::put('uport_last_name', $nameObject->getLastName());
-                                                            Session::put('uport_id', $request->input('uport'));
-                                                            Session::put('uport_email', $request->input('email'));
-                                                            Session::put('uport_npi', $npi1);
-                                                            Session::save();
-                                                            $return['message'] = 'OK';
-                                                            $return['url'] = route('uport_user_add');
-                                                        }
-                                                    } else {
-                                                        $return['message'] = 'Unauthorized client.  Please contact the owner of this authorization server for assistance.';
-                                                    }
-                                                } else {
-                                                    $uport_notify = true;
-                                                    $valid_npi = $npi1;
-                                                }
-                                            } else {
-                                                $return['message'] = 'You are not authorized to access this authorization server.  NPI not found in database.';
-                                            }
-                                        }
-                                    } else {
-                                        if ($owner_query->login_uport == 1) {
-                                            $uport_notify = true;
-                                        } else {
-                                            $return['message'] = 'You are not authorized to access this authorization server.  NPI not 10 characters.';
-                                        }
-                                    }
-                                } else {
-                                    if ($owner_query->login_uport == 1) {
-                                        $uport_notify = true;
-                                    } else {
-                                        $return['message'] = 'You are not authorized to access this authorization server.  NPI not numeric.';
-                                    }
-                                }
-                            } else {
-                                if ($owner_query->login_uport == 1) {
-                                    $uport_notify = true;
-                                } else {
-                                    $return['message'] = 'You are not authorized to access this authorization server.  NPI is blank.';
-                                }
-                            }
-                        } else {
-                            if ($owner_query->login_uport == 1) {
-                                $uport_notify = true;
-                            } else {
-                                $return['message'] = 'You are not authorized to access this authorization server';
-                            }
-                        }
-                    }
-                } else {
-                    $return['message'] = 'Login cannot be completed.  No email address is associated with your uPort account.  Add an e-mail address to your uPort and try again.';
-                }
-            }
-            if ($uport_notify == true) {
-                // Check email if duplicate
-                $email_query = DB::table('users')->where('email', '=', $request->input('email'))->first();
-                if ($email_query) {
-                    $return['message'] = 'There is already a user that has your email address';
-                } else {
-                    // Email notification to owner that someone is trying to login via uPort
-                    $uport_data = [
-                        'username' => $request->input('uport'),
-                        'first_name' => $nameObject->getFirstName(),
-                        'last_name' => $nameObject->getLastName(),
-                        'uport_id' => $request->input('uport'),
-                        'password' => 'Pending',
-                        'email' => $request->input('email'),
-                        'npi' => $valid_npi
-                    ];
-                    DB::table('oauth_users')->insert($uport_data);
-                    $uport_data1 = [
-                        'name' => $request->input('uport'),
-                        'email' => $request->input('email')
-                    ];
-                    DB::table('users')->insert($uport_data1);
-                    $data1['message_data'] = $name . ' has just attempted to login using your Trustee Authorizaion Server via uPort.';
-                    $data1['message_data'] .= 'Go to ' . route('authorize_user') . '/ to review and authorize.';
-                    $title = 'New uPort User';
-                    $to = $owner_query->email;
-                    $this->send_mail('auth.emails.generic', $data1, $title, $to);
-                    if ($owner_query->mobile != '') {
-                        if (env('NEXMO_API') == null) {
-    						$this->textbelt($owner_query->mobile, $data['message_data']);
-    					} else {
-    						$this->nexmo($owner_query->mobile, $data['message_data']);
-    					}
-                    }
-                    $return['message'] = 'Authorization owner has been notified and wait for an email for your approval';
-                }
-            }
+        $vp_request_id = $request->input('id');
+        $vp_request_row = DB::table('vp_requests')->find($vp_request_id);
+        if (!$vp_request_row) return response('Request not found', 404);
+        if ($vp_request_row->presentation) return response('Request already answered', 403);
+        $expires = strtotime($vp_request_row->expires);
+        if ($expires < time()) return response('Request expired', 410);
+        $owner = DB::table('owner')->first();
+        $domain = parse_url(url(''), PHP_URL_HOST);
+        $challenge = $vp_request_id;
+        if (!$request->isMethod('post')) {
+            // View request
+            $vp_request = [
+                'type' => 'VerifiablePresentationRequest',
+                'query' => json_decode($vp_request_row->query),
+                'challenge' => $challenge,
+                'domain' => $domain
+            ];
+            return response()->json($vp_request);
         } else {
-            $return['message'] = 'Please contact the owner of this authorization server for assistance.';
+            // Accept request
+            $vp_json = $request->input('presentation');
+            if (!$vp_json) return response('Missing presentation', 400);
+            $vp_verify_options = [
+                'challenge' => $challenge,
+                'domain' => $domain,
+                'proofPurpose' => 'authentication'
+            ];
+            try {
+                DIDKit::verifyPresentation($vp_json, $vp_verify_options);
+            } catch(\Exception $e){
+                return response('Unable to verify presentation: '.$e->getMessage(), 400);
+            }
+            // Save the VP for further processing in the user's session.
+            DB::table('vp_requests')->where('id', $vp_request_id)->update([
+                'presentation' => $vp_json
+            ]);
+            return response('', 200);
         }
-        return $return;
     }
 
-    public function uport_user_add(Request $request)
+    public function login_vp(Request $request)
+    {
+        if (!Auth::guest()) return redirect()->route('home');
+        $owner = DB::table('owner')->first();
+        if (!$owner) return redirect()->route('install');
+        if ($request->input('retry_vp')) {
+            Session::forget('login_vp');
+            return back();
+        }
+        $data['name'] = $owner->firstname . ' ' . $owner->lastname;
+        $data['noheader'] = true;
+        $data['nooauth'] = true;
+        $data['noform'] = true;
+        if (file_exists(base_path() . '/.version')) {
+            $data['version'] = file_get_contents(base_path() . '/.version');
+        } else {
+            $version = $this->github_all();
+            $data['version'] = $version[0]['sha'];
+        }
+        $vp_request_id = Session::get('login_vp');
+        $vp_request_row = $vp_request_id ?
+            DB::table('vp_requests')->find($vp_request_id) : NULL;
+        if ($vp_request_row) {
+            $vp_json = $vp_request_row->presentation;
+            if ($vp_json) {
+                // Handle VP received
+                return $this->login_vp_received($request, $vp_json, $owner, $data);
+            }
+            // Use existing VP request if not expired
+            $expires = new Carbon($vp_request_row->expires);
+            if ($expires < Carbon::now()) $vp_request_row = NULL;
+        }
+        if (!$vp_request_row) {
+            // Create VP request
+            $vp_request_id = $this->gen_uuid();
+            $expires = Carbon::now()->addMinutes(15);
+            $org_name = 'Trustee Authorization Server'
+                .($owner ? ' for '.$owner->firstname.' '.$owner->lastname : '');
+            $credential_query = [
+                'reason' => 'Sign in to '.$org_name,
+                'example' => [
+                    '@context' => ['https://www.w3.org/2018/credentials/v1', 'https://schema.org'],
+                    'type' => 'VerifiableCredential'
+                ]
+            ];
+            $query = [
+                [
+                    'type' => 'QueryByExample',
+                    'credentialQuery' => $credential_query
+                ]
+            ];
+            $vp_request_row = [
+                'id' => $vp_request_id,
+                'expires' => $expires,
+                'query' => json_encode($query)
+            ];
+            Session::put('login_vp', $vp_request_id);
+            DB::table('vp_requests')->insert($vp_request_row);
+        }
+        $data['vp_request_url'] = url('vp_request') . '?id=' . $vp_request_id;
+        $data['vp_request_expiration'] = $expires;
+        return view('auth.login', $data);
+    }
+
+    protected function login_vp_received(Request $request, $vp_json, $owner, $data)
+    {
+        $data['vp_received'] = true;
+        $vp = json_decode($vp_json);
+        $vc = $vp->verifiableCredential;
+        $vc_verify_options = [
+            'proofPurpose' => 'assertionMethod',
+        ];
+        try {
+            $verify_result = json_decode(DIDKit::verifyCredential($vc, $vc_verify_options));
+            if (count($verify_result->errors) > 0) {
+                throw new Exception(implode('; ', $verify_result->errors));
+            }
+        } catch(\Exception $e) {
+            return view('auth.login', $data)->withErrors(['tryagain' => 'We were unable to verify the credential. Error: ' . $e->getMessage()]);
+        }
+        $trusted_issuers = preg_split('/\s+/', env('TRUSTED_ISSUERS'));
+        if (!in_array($vc->issuer, $trusted_issuers)) {
+            return view('auth.login', $data)->withErrors(['tryagain' => 'Credential issuer not recognized']);
+        }
+        if ($vp->holder != $vc->credentialSubject->id) {
+            return view('auth.login', $data)->withErrors(['tryagain' => 'Credential subject does not match holder']);
+        }
+        // Get NPI from credential
+        $identifier = @$vc->credentialSubject->identifier;
+        $npi = preg_match('/^npi:(\d{10})$/', $identifier, $m) ? $m[1] : NULL;
+        if (!$npi) {
+            return view('auth.login', $data)->withErrors(['tryagain' => 'We did not find a NPI in that credential. Please try a different credential.']);
+        }
+        // Look up account by NPI
+        $oauth_user = DB::table('oauth_users')->where('npi', '=', $npi)->where('password', '!=', 'Pending')->first();
+        if ($oauth_user) {
+            // If account exists for this NPI, log the user into it
+            return $this->login_vp_common($oauth_user, $data);
+        }
+        // No existing account found. Prepare to create new account for user.
+        $email = $request->input('email');
+        if (!$email) {
+            // Prompt user for email address. We need email for the unique key
+            // constraint in the users table.
+            $data['get_email'] = true;
+            return view('auth.login', $data);
+        }
+        // Make sure email is unique
+        if (DB::table('users')->where('email', '=', $email)->exists()) {
+            return view('auth.login', $data)->withErrors(['tryagain' => 'You are not authorized to access this authorization server.  Email address already exists for another user.']);
+        }
+        // Make sure user is unique
+        if (DB::table('oauth_users')->where('npi', '=', $npi)->exists()) {
+            return view('auth.login', $data)->withErrors(['tryagain' => 'You are not authorized to access this authorization server. NPI already exists for another user.']);
+        }
+        // Obtain NPI information
+        $npi_arr = $this->npi_lookup($npi);
+        if (!$npi_arr) {
+            return view('auth.login', $data)->withErrors(['tryagain' => 'NPI lookup API is not working; try again later']);
+        }
+        $name = '';
+        $first_name = '';
+        $last_name = '';
+        if ($npi_arr['result_count'] > 0) {
+            $basic = $npi_arr['results'][0]['basic'];
+            $first_name = @$basic['first_name'];
+            $last_name = @$basic['last_name'];
+            $middle_name = @$basic['middle_name'];
+            $credential = @$basic['credential'];
+            $name = $first_name
+                .($middle_name ? ' ' . $middle_name : '')
+                .($last_name ? ' ' . $last_name : '')
+                .($credential ? ', ' . $credential : '');
+        }
+        if (!$name) {
+            return view('auth.login', $data)->withErrors(['tryagain' => 'Unable to look up name for NPI']);
+        }
+        if ($owner->any_npi) {
+            // Automatically add user if NPI is valid
+            if (Session::get('oauth_response_type') == 'code') {
+                $client_id = Session::get('oauth_client_id');
+            } else {
+                $client_id = $owner->client_id;
+            }
+            $authorized = DB::table('oauth_clients')->where('client_id', '=', $client_id)->where('authorized', '=', 1)->exists();
+            if (!$authorized) {
+                return view('auth.login', $data)->withErrors(['tryagain' => 'Unauthorized client. Please contact the owner of this authorization server for assistance.']);
+            }
+            $info = [
+                'npi' => $npi,
+                'first_name' => $first_name,
+                'last_name' => $last_name,
+                'email' => $email,
+            ];
+            return $this->vp_user_add($request, $info);
+        } else {
+            // Email notification to owner that someone is trying to login via Verifiable Credential
+            $sub = $this->gen_uuid();
+            $oauth_user = [
+                'username' => $sub,
+                'password' => 'Pending',
+                'first_name' => $first_name,
+                'last_name' => $last_name,
+                'email' => $email,
+                'npi' => $npi,
+                'sub' => $sub,
+            ];
+            DB::table('oauth_users')->insert($oauth_user);
+            $user = [
+                'name' => $sub,
+                'email' => $email,
+            ];
+            DB::table('users')->insert($user);
+            $data1['message_data'] = $name . ' has just attempted to login using your Trustee Authorizaion Server via Verifiable Credential.';
+            $data1['message_data'] .= 'Go to ' . route('authorize_user') . '/ to review and authorize.';
+            $title = 'New Verifiable Credential User';
+            $to = $owner->email;
+            $this->send_mail('auth.emails.generic', $data1, $title, $to);
+            if ($owner->mobile != '') {
+                if (env('NEXMO_API') == null) {
+                    $this->textbelt($owner->mobile, $data['message_data']);
+                } else {
+                    $this->nexmo($owner->mobile, $data['message_data']);
+                }
+            }
+            $data['message'] = 'Authorization owner has been notified and wait for an email for your approval';
+            return view('auth.login', $data);
+        }
+    }
+
+    public function login_vp_poll(Request $request)
+    {
+        $vp_request_id = Session::get('login_vp');
+        if (!$vp_request_id) return response('no vp request for session', 400);
+        $vp_request = DB::table('vp_requests')->find($vp_request_id);
+        if (!$vp_request) return response('vp request not found', 404);
+        $expires = new Carbon($vp_request->expires);
+        $expired = $expires < Carbon::now();
+        if ($expired) return response('vp request expired', 410);
+        $vp = $vp_request->presentation;
+        if (!$vp) return response('vp not yet received', 403);
+        return response('vp received', 200);
+    }
+
+    protected function vp_user_add(Request $request, $info)
     {
         $owner = DB::table('owner')->first();
         if (Session::get('oauth_response_type') == 'code') {
@@ -954,35 +1025,30 @@ class OauthController extends Controller
         } else {
             $client_id = $owner->client_id;
         }
-        $sub = Session::get('uport_id');
-        $email = Session::get('uport_email');
-        $user_data = [
+        $sub = $this->gen_uuid();
+        $npi = $info['npi'];
+        $email = $info['email'];
+        if (!$email) throw new Exception('missing email');
+        $oauth_user = (object)[
             'username' => $sub,
             'password' => sha1($sub),
-            'first_name' => Session::get('uport_first_name'),
-            'last_name' => Session::get('uport_last_name'),
-            'email' => $email,
-            'npi' => Session::get('uport_npi'),
+            'first_name' => $info['first_name'],
+            'last_name' => $info['last_name'],
+            'npi' => $npi,
             'sub' => $sub,
-            'uport_id' => $sub
+            'email' => $email,
         ];
-        Session::forget('uport_first_name');
-        Session::forget('uport_last_name');
-        Session::forget('uport_npi');
-        Session::forget('uport_id');
-        Session::forget('uport_email');
-        DB::table('oauth_users')->insert($user_data);
-        $user_data1 = [
+        DB::table('oauth_users')->insert((array)$oauth_user);
+        $user = (object)[
             'name' => $sub,
             'email' => $email
         ];
-        DB::table('users')->insert($user_data1);
+        $user->id = DB::table('users')->insertGetId((array)$user);
         $this->add_user_policies($email, ['All']);
-        $user = DB::table('oauth_users')->where('username', '=', $sub)->first();
-        $local_user = DB::table('users')->where('name', '=', $sub)->first();
-        $this->login_sessions($user, $client_id);
-        Auth::loginUsingId($local_user->id);
-        $this->activity_log($user->email, 'Login - uPort, New User');
+        $this->login_sessions($oauth_user, $client_id);
+        Auth::loginUsingId($user->id);
+        Session::forget('login_vp');
+        $this->activity_log('npi:'.$npi, 'Login - Verifiable Credential, New User');
         if (Session::has('uma_permission_ticket') && Session::has('uma_redirect_uri') && Session::has('uma_client_id') && Session::has('email')) {
             // If generated from rqp_claims endpoint, do this
             return redirect()->route('rqp_claims');

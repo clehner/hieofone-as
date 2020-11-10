@@ -62,12 +62,13 @@ Route::any('picture_cancel', ['as' => 'picture_cancel', 'uses' => 'OauthControll
 Route::any('login', ['as' => 'login', 'uses' => 'OauthController@login']);
 Route::any('logout', ['as' => 'logout', 'uses' => 'OauthController@logout']);
 Route::any('login_passwordless', ['as' => 'login_passwordless', 'uses' => 'OauthController@login_passwordless']);
-Route::post('login_uport', ['as' => 'login_uport', 'middleware' => 'csrf', 'uses' => 'OauthController@login_uport']);
+Route::any('login_vp', ['as' => 'login_vp', 'uses' => 'OauthController@login_vp']);
+Route::any('login_vp_poll', ['as' => 'login_vp_poll', 'middleware' => 'csrf', 'uses' => 'OauthController@login_vp_poll']);
 Route::any('oauth_login', ['as' => 'oauth_login', 'uses' => 'OauthController@oauth_login']);
 Route::any('password_email', ['as' => 'password_email', 'middleware' => 'csrf', 'uses' => 'OauthController@password_email']);
 Route::any('password_reset/{id}', ['as' => 'password_reset', 'middleware' => 'csrf', 'uses' => 'OauthController@password_reset']);
 Route::any('remote_logout', ['as' => 'remote_logout', 'uses' => 'OauthController@remote_logout']);
-Route::any('uport_user_add', ['as' => 'uport_user_add', 'uses' => 'OauthController@uport_user_add']);
+Route::any('vp_request', ['as' => 'vp_request', 'uses' => 'OauthController@vp_request']);
 
 // Home pages
 Route::get('home', ['as' => 'home', 'uses' => 'HomeController@index']);
