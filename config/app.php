@@ -212,4 +212,9 @@ return [
 		'QrCode' => SimpleSoftwareIO\QrCode\Facades\QrCode::class
     ],
 
+    'debug_blacklist' => [
+        '_SERVER' => array_keys($_ENV),
+        '_ENV' => array_keys($_ENV),
+    ],
+
 ];
